@@ -113,6 +113,23 @@ object NativeAetherBridge {
             List(devices.length()) { devices.getString(it) }
         }
 
+    /**
+     * Whether this phone already holds a usable identity for [configJson]'s slot.
+     *
+     * Answers from the engine's store on disk -- no network, no registration --
+     * so the endpoint screen can say "you already have a key" and skip the step
+     * rather than asking for one the engine would only read back.
+     *
+     * False on any error. That is the safe direction: a wrong "yes" would hide
+     * a real problem, and a wrong "no" merely shows a step that turns out to be
+     * unnecessary.
+     */
+    fun hasIdentity(configJson: String): Boolean = isLoaded && runCatching {
+        val json = JSONObject(nativeIdentityState(configJson))
+        json.optBoolean("ok") && json.optBoolean("present")
+    }.getOrDefault(false)
+    private external fun nativeIdentityState(configJson: String): String
+
     fun scan(configJson: String): Result<List<EndpointScanResult>> = call { nativeScan(configJson) }
         .mapCatching { raw ->
             val json = JSONObject(raw)

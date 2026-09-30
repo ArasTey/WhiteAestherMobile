@@ -2555,7 +2555,7 @@ class AetherVpnService : VpnService() {
         transport: String,
         splitTunnel: SplitTunnel = SplitTunnel(),
         dns: List<String> = emptyList(),
-    ): ParcelFileDescriptor? {
+    ): ParcelFileDescriptor? = runCatching {
         val configureIntent = PendingIntent.getActivity(
             this,
             0,
@@ -2647,8 +2647,22 @@ class AetherVpnService : VpnService() {
             builder.setMetered(false)
             builder.setBlocking(false)
         }
-        return builder.establish()
-    }
+        // The platform gives one package one VPN interface, so establishing a
+        // second silently takes the first away. When that first was the kill
+        // switch's blackhole, the field went on holding a descriptor for an
+        // interface that no longer existed, and the next raiseBlackhole found it
+        // non-null and reported traffic blocked while it was not. Letting go
+        // first keeps the field describing the interface that actually exists.
+        dropBlackhole()
+        builder.establish()
+    }.onFailure { error ->
+        // Builder.establish throws when consent is revoked between prepare() and
+        // here, and addAddress throws on a blank address. Nothing else in this
+        // method was allowed to reach the main thread's default handler, and
+        // serviceScope has no CoroutineExceptionHandler, so an unguarded throw
+        // took the process down instead of reporting a failed connect.
+        EngineLog.record(LogLevel.WARN, "tun", "the interface could not be built: ${error.message}")
+    }.getOrNull()
 
     /**
      * Puts one resolver on the interface, or leaves it off.
@@ -3147,6 +3161,17 @@ class AetherVpnService : VpnService() {
 
         private const val ACTION_START = "com.whitedns.whiteaesther.START"
         private const val ACTION_STOP = "com.whitedns.whiteaesther.STOP"
+
+        /**
+         * How long a carrier gets to come up when it is only carrying a
+         * registration.
+         *
+         * Shorter than a session's carrier would get, because nothing is
+         * waiting on a tunnel here: either the carrier is listening in time to
+         * buy a key or it is not, and a user watching a button would rather be
+         * told than left waiting.
+         */
+        private const val CARRIER_PREPARE_TIMEOUT_MS = 45_000L
         private const val EXTRA_CONFIG = "config"
         private const val EXTRA_CHAIN = "chain"
         private const val EXTRA_SPLIT = "split"

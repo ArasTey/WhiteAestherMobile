@@ -97,6 +97,7 @@
     <string name="this_address_is_not_for_settings_transport">This address is not for %1$s</string>
     <string name="use_automatic">Use automatic</string>
     <string name="specific_address">Specific address</string>
+    <string name="endpoint_automatic">Automatic</string>
     <string name="address">Address</string>
     <string name="valid_address">Valid address</string>
     <string name="needs_an_ip_and_a_port">Needs an IP and a port</string>
@@ -347,6 +348,8 @@
     <string name="protocol_masque_in_masque">MASQUE in MASQUE</string>
     <string name="protocol_wireguard">WireGuard</string>
     <string name="protocol_warp_in_warp">WARP in WARP</string>
+    <string name="scan_automatic">Automatic</string>
+    <string name="automatic_decides_per_network">Automatic decides how hard to search, per network and per step.</string>
     <string name="scan_turbo">Turbo</string>
     <string name="scan_balanced">Balanced</string>
     <string name="scan_thorough">Thorough</string>
@@ -367,6 +370,24 @@
     <string name="msg_not_an_identity">That file is not a WhiteAesther identity</string>
     <string name="msg_identity_saved">Identity saved. Keep it somewhere safe.</string>
     <string name="msg_scanning_routes">Scanning validated %1$s routes…</string>
+    <!-- Endpoint scan outcomes. The engine's own wording stays in the
+         diagnostics log; these are what a person can act on. -->
+    <string name="msg_scan_nothing_answered">The search finished, but nothing answered from here. The network works — there is just no way out on it right now.</string>
+    <string name="msg_scan_still_working">Still trying to reach Cloudflare. This is taking longer than usual.</string>
+    <string name="msg_scan_network_unreachable">Could not reach the server that issues this app\'s key. That is the network, not the app — nothing can be searched until it answers.</string>
+    <!-- Getting the key. -->
+    <string name="get_my_key">Get my key</string>
+    <string name="turn_your_vpn_on">Turn on your VPN</string>
+    <string name="key_have_turn_vpn_off">You have a key. Turn your VPN off, then come back and test.</string>
+    <string name="msg_key_asking">Asking for this phone\'s key…</string>
+    <string name="err_no_key_to_connect">This phone has no key yet. Get one under Routes · Endpoint, then connect.</string>
+    <string name="msg_key_ready">Key received. Turn your VPN off, then come back and test.</string>
+    <string name="msg_key_already_have">You already have a key. Nothing to fetch.</string>
+    <string name="msg_key_needed_first">Get your key first. Endpoints cannot be found without it.</string>
+    <string name="msg_key_failed">Could not get a key. Check your connection, or turn on your VPN and try again.</string>
+    <string name="msg_key_waiting">The last attempt left a wait on this network. Give it a minute before trying again — pressing sooner only makes it longer.</string>
+    <string name="loading_line_work">Still working</string>
+    <string name="err_carrier_unavailable">That carrier could not be started.</string>
     <string name="msg_nothing_over_trying">Nothing over %1$s, trying %2$s…</string>
     <string name="msg_scan_cancelled">Scan cancelled</string>
     <string name="msg_scan_failed">Endpoint scan failed</string>
@@ -562,4 +583,8 @@
     <string name="add_a_home_screen_widget">Add a home-screen widget</string>
     <string name="connect_and_disconnect_from_the_home_screen">Connect and disconnect without opening the app.</string>
     <string name="err_no_widget_pin">This launcher will not place it for you. Look for WhiteAesther in its own widget list.</string>
+    <plurals name="msg_scan_found">
+        <item quantity="one">%1$d validated endpoint found</item>
+        <item quantity="other">%1$d validated endpoints found</item>
+    </plurals>
 </resources>

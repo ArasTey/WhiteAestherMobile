@@ -199,6 +199,19 @@ enum class EndpointFamily {
 }
 
 enum class ScanStrategy(val wireName: String, @StringRes val label: Int) {
+    /**
+     * Let Automatic decide, per network and per rung.
+     *
+     * A depth set here is a fixed cost on every connect, and the one network
+     * that wants a deep search is not the one that needs it everywhere.
+     * Automatic already prices its rungs differently -- a quick search, then
+     * one deep one only where the cheap answers have failed -- so "off" means
+     * handing it over rather than picking a compromise on the user's behalf.
+     *
+     * The engine reads anything unrecognised as balanced, so passing this
+     * straight down is safe; Automatic replaces it with a real depth per rung.
+     */
+    AUTO("auto", R.string.scan_automatic),
     TURBO("turbo", R.string.scan_turbo),
     BALANCED("balanced", R.string.scan_balanced),
     THOROUGH("thorough", R.string.scan_thorough),
@@ -352,7 +365,7 @@ data class AppSettings(
     // way to know it. A fixed default of H3 meant every install on a network
     // that blocks UDP spent minutes failing before anything else was tried.
     val transport: TunnelProtocol = TunnelProtocol.AUTO,
-    val scanStrategy: ScanStrategy = ScanStrategy.BALANCED,
+    val scanStrategy: ScanStrategy = ScanStrategy.AUTO,
     val dualStack: Boolean = true,
     val validationEnabled: Boolean = true,
     val noizeProfile: String = "firewall",

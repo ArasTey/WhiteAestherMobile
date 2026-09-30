@@ -1,7 +1,9 @@
 package com.whitedns.whiteaesther.data
 
 import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +65,12 @@ object AddressReporter {
      */
     private const val CARRIER_TIMEOUT_MS = 60_000
 
-    private val Context.addressStore by preferencesDataStore(name = "whiteaesther_address")
+    private val Context.addressStore by preferencesDataStore(
+        name = "whiteaesther_address",
+        // See SettingsRepository: an unreadable file must not become an
+        // exception on a flow the UI collects at launch.
+        corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+    )
     private val REAL_ADDRESS = stringPreferencesKey("real_address")
 
     /**

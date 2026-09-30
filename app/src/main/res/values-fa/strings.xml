@@ -95,6 +95,7 @@
     <string name="this_address_is_not_for_settings_transport">این آدرس برای %1$s نیست</string>
     <string name="use_automatic">استفاده از خودکار</string>
     <string name="specific_address">آدرس مشخص</string>
+    <string name="endpoint_automatic">خودکار</string>
     <string name="address">آدرس</string>
     <string name="valid_address">آدرس معتبر</string>
     <string name="needs_an_ip_and_a_port">به یک IP و یک پورت نیاز دارد</string>
@@ -341,6 +342,8 @@
     <string name="protocol_masque_in_masque">ماسک در ماسک</string>
     <string name="protocol_wireguard">WireGuard</string>
     <string name="protocol_warp_in_warp">WARP in WARP</string>
+    <string name="scan_automatic">خودکار</string>
+    <string name="automatic_decides_per_network">خودکار تصمیم می‌گیرد چقدر جست‌وجو کند، برای هر شبکه و هر مرحله.</string>
     <string name="scan_turbo">توربو</string>
     <string name="scan_balanced">متعادل</string>
     <string name="scan_thorough">دقیق</string>
@@ -360,6 +363,22 @@
     <string name="msg_identity_imported">هویت وارد شد. برای استفاده وصل شوید.</string>
     <string name="msg_not_an_identity">این فایل هویت WhiteAesther نیست</string>
     <string name="msg_identity_saved">هویت ذخیره شد. جای امنی نگهش دارید.</string>
+    <string name="msg_scan_found">نقطه‌های پایانی آماده‌اند</string>
+    <string name="msg_scan_nothing_answered">جست‌وجو تمام شد، اما از اینجا کسی پاسخ نداد. شبکه کار می‌کند — فقط الان راهی بیرون نیست.</string>
+    <string name="msg_scan_still_working">هنوز در حال تلاش برای رسیدن به Cloudflare هستیم. این بار طولانی‌تر از معمول شده.</string>
+    <string name="msg_scan_network_unreachable">به سروری که کلید این برنامه را صادر می‌کند نمی‌رسیم. مشکل از شبکه است نه از برنامه — تا آن پاسخ ندهد چیزی برای جست‌وجو نیست.</string>
+    <string name="get_my_key">کلیدم را بگیر</string>
+    <string name="turn_your_vpn_on">وی‌پی‌ان را روشن کنید</string>
+    <string name="key_have_turn_vpn_off">کلید دارید. حالا وی‌پی‌ان را خاموش کنید و برگردید تا تست بگیرید.</string>
+    <string name="msg_key_asking">در حال گرفتن کلید این گوشی…</string>
+    <string name="err_no_key_to_connect">این گوشی هنوز کلید ندارد. از مسیرها · نقطهٔ پایانی یکی بگیرید، بعد وصل شوید.</string>
+    <string name="msg_key_ready">کلید دریافت شد. حالا وی‌پی‌ان را خاموش کنید و برگردید تا تست بگیرید.</string>
+    <string name="msg_key_already_have">کلید دارید. چیزی برای دریافت نیست.</string>
+    <string name="msg_key_needed_first">اول کلید را بگیرید. بدون کلید نمی‌شود نقطهٔ پایانی پیدا کرد.</string>
+    <string name="msg_key_failed">کلید گرفته نشد. اتصال را بررسی کنید، یا وی‌پی‌ان را روشن کنید و دوباره امتحان کنید.</string>
+    <string name="msg_key_waiting">تلاش قبلی روی این شبکه یک زمان انتظار گذاشته است. یک دقیقه صبر کنید و بعد دوباره امتحان کنید — زودتر زدن فقط آن را طولانی‌تر می‌کند.</string>
+    <string name="loading_line_work">هنوز در حال کار</string>
+    <string name="err_carrier_unavailable">آن حامل اجرا نشد.</string>
     <string name="msg_scanning_routes">در حال جست‌وجوی مسیرهای تأییدشدهٔ %1$s…</string>
     <string name="msg_nothing_over_trying">چیزی روی %1$s نبود، %2$s را امتحان می‌کنیم…</string>
     <string name="msg_scan_cancelled">جست‌وجو لغو شد</string>
@@ -556,4 +575,8 @@
     <string name="add_a_home_screen_widget">افزودن ابزارک صفحهٔ اصلی</string>
     <string name="connect_and_disconnect_from_the_home_screen">اتصال و قطع اتصال بدون باز کردن اپ.</string>
     <string name="err_no_widget_pin">این لانچر خودش ابزارک را اضافه نمی‌کند. وایت‌ایستر را در فهرست ابزارک‌های خودش پیدا کنید.</string>
+    <plurals name="msg_scan_found">
+        <item quantity="one">%1$d نقطهٔ پایانی معتبر پیدا شد</item>
+        <item quantity="other">%1$d نقطهٔ پایانی معتبر پیدا شد</item>
+    </plurals>
 </resources>

@@ -312,18 +312,28 @@ class MainActivity : ComponentActivity() {
                     recreate()
                 }
             }
+            // Asked once, from the engine's store, with no network. Decides
+            // whether the key step is shown at all.
+            LaunchedEffect(Unit) { viewModel.refreshHasKey(settings) }
             WhiteAestherTheme(themeMode = settings.themeMode) {
                 WhiteAestherApp(
                     settings = settings,
                     engineStatus = viewModel.engineStatus.collectAsStateWithLifecycle().value,
                     endpointScannerState = viewModel.endpointScannerState.collectAsStateWithLifecycle().value,
                     chainState = viewModel.chainState.collectAsStateWithLifecycle().value,
-                    nativeVersion = com.whitedns.whiteaesther.core.NativeAetherBridge.versionOrNull(),
+                    // The engine cannot change its version under a running process, so
+        // this is asked once. It sat in the root composable body, which
+        // re-executes on every emission from ~16 collected flows, so each one
+        // cost a JNI crossing plus a string allocation.
+        nativeVersion = remember { com.whitedns.whiteaesther.core.NativeAetherBridge.versionOrNull() },
+                    hasKey = viewModel.hasKey.collectAsStateWithLifecycle().value,
                     logEntries = EngineLog.entries.collectAsStateWithLifecycle().value,
                     onSettingsChange = viewModel::save,
                     onConnect = ::requestConnection,
                     onStop = { AetherVpnService.stop(this) },
-                    onScanEndpoints = viewModel::scanEndpoints,
+        onScanEndpoints = viewModel::scanEndpoints,
+        onGetKey = viewModel::getKey,
+        onCancelKeyPreparation = viewModel::cancelKeyPreparation,
                     onTestEndpoint = viewModel::testEndpoint,
                     onResetEndpoint = viewModel::resetEndpoint,
                     onFetchBridges = { country -> viewModel.fetchBridges(settings, country) },
@@ -391,6 +401,24 @@ class MainActivity : ComponentActivity() {
         settings.endpointValidationError()?.let { error ->
             EngineStatusStore.update(
                 EngineStatus(EngineStage.ERROR, settings.mode, message = getString(error)),
+            )
+            return
+        }
+        // No key, no tunnel. Every step from here needs one -- prepare, search,
+        // connect -- and cannot get one for itself on a network that blocks
+        // registration. Left to run, the connection fails several minutes later
+        // with a message about endpoints, which names the wrong missing thing.
+        //
+        // Only when it is known there is no key. Not yet answered is not the
+        // same as no, and refusing on a phone whose store is merely still being
+        // read would stop a connect that would have worked.
+        if (viewModel.hasKey.value == false) {
+            EngineStatusStore.update(
+                EngineStatus(
+                    EngineStage.ERROR,
+                    settings.mode,
+                    message = getString(R.string.err_no_key_to_connect),
+                ),
             )
             return
         }

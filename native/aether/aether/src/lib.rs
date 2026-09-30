@@ -886,6 +886,22 @@ struct ExportEnvelope {
 ///
 /// Costs nothing when the identities are already held: both loaders answer from
 /// the store without a round trip.
+/// Whether this phone already holds a usable identity for [config]'s slot.
+///
+/// Answers from the identity store alone -- no network, no registration, no
+/// lock. It exists so the app can say "you already have a key" and skip the
+/// step, instead of asking for one the engine would only answer from disk.
+///
+/// Deliberately a query and not a call to [provision_embedded]: provisioning is
+/// correct but not free, and a question must not cause the thing it asks about.
+pub fn identity_present(config: &EmbeddedConfig) -> bool {
+    let site = config.identity_site();
+    match identity::load(&site.store_path, &site.legacy) {
+        Ok(loaded) => loaded.store.usable(site.slot).is_some(),
+        Err(_) => false,
+    }
+}
+
 pub async fn provision_embedded(config: &EmbeddedConfig) -> Result<Vec<String>> {
     let nested = matches!(
         config.protocol(),

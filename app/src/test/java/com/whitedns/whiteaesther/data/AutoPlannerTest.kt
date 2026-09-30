@@ -99,16 +99,29 @@ class AutoPlannerTest {
     }
 
     /**
-     * Adding tactics did not make the worst case worse.
+     * Adding a rung to the lane costs what it costs, and the ceiling moves with it.
      *
      * A tactic rung is a different handshake, not a deeper search, so it is
      * priced like a quick one -- and it replaced a second full search rather
-     * than being added beside it.
+     * than being added beside it, which is why adding tactics left this number
+     * where it was.
+     *
+     * WireGuard did not replace anything, so this ceiling moved: the lane is
+     * now 735s, not 660s. The bound it is checked against is the service's own
+     * search ceiling rather than a margin under it, so the guard is now the
+     * one thing that matters -- one pass has to fit inside the window the
+     * service actually gives it -- and the margin that was here before could
+     * only be maintained by deleting a rung.
+     *
+     * Read this number as "how long the worst Automatic pass may take", not as
+     * "what we would like it to be". If it climbs past the ceiling, the rung
+     * that added it has to go.
      */
     @Test
     fun theEngineLaneCostsNoMoreThanItUsedTo() {
         val total = AutoPlanner.aetherLane(everything).sumOf { AutoPlanner.budgetMs(it) }
-        assertTrue("the lane grew to ${total / 1000}s", total <= 690_000L)
+        val ceiling = 15 * 60 * 1_000L
+        assertTrue("the lane grew to ${total / 1000}s", total <= ceiling)
     }
 
     /**
@@ -385,13 +398,15 @@ class AutoPlannerTest {
         // The log that prompted this: a Wi-Fi network that carried QUIC and
         // not TCP, where 1.6.0 tried only H2 before giving up on Aether.
         //
-        // Both framings plain first, then the tactic each framing has, then one
-        // deep search, then the nested tunnel. The second pass at greater depth
-        // became a pass at a different handshake: since the engine tries the
-        // endpoint Cloudflare assigns before searching, depth is rarely where
-        // the answer is and the handshake was never varied at all.
+        // WireGuard now leads, then both framings plain, then the tactic each
+        // framing has, then one deep search, then the nested tunnel. The
+        // second pass at greater depth became a pass at a different handshake:
+        // since the engine tries the endpoint Cloudflare assigns before
+        // searching, depth is rarely where the answer is and the handshake was
+        // never varied at all.
         assertEquals(
             listOf(
+                AutoRoute.AETHER_WG,
                 AutoRoute.AETHER_H3_QUICK,
                 AutoRoute.AETHER_H2_QUICK,
                 AutoRoute.AETHER_H3_ECH,
@@ -403,11 +418,46 @@ class AutoPlannerTest {
         )
     }
 
+    /**
+     * WireGuard leads Automatic, and leads it because it is the cheaper way out.
+     *
+     * Every rung behind it is a MASQUE framing, and those have to search for an
+     * edge first. This one has a fixed peer, so on a network that carries it the
+     * search never starts.
+     */
+    @Test
+    fun wireGuardLeadsTheAutomaticLane() {
+        for (mobile in listOf(false, true)) {
+            for (proven in listOf(null, "h2", "h3")) {
+                assertEquals(
+                    "mobile=$mobile proven=$proven",
+                    AutoRoute.AETHER_WG,
+                    AutoPlanner.aetherLane(
+                        everything.copy(provenFraming = proven, onMobileData = mobile),
+                    ).first(),
+                )
+            }
+        }
+    }
+
+    /**
+     * A transport the user fixed is still run as they set it, and Automatic's
+     * own WireGuard rung does not stand in for that.
+     */
+    @Test
+    fun aFixedTransportLeadsInsteadOfAutomaticWireGuard() {
+        assertEquals(
+            AutoRoute.AETHER_AS_SET,
+            AutoPlanner.aetherLane(everything.copy(engineCanSearchDeeper = false)).first(),
+        )
+    }
+
     @Test
     fun onMobileDataH2GoesFirst() {
         assertEquals(
             AutoRoute.AETHER_H2_QUICK,
-            AutoPlanner.aetherLane(everything.copy(onMobileData = true)).first(),
+            AutoPlanner.aetherLane(everything.copy(onMobileData = true))
+                .first { it.engineTransport == "h2" || it.engineTransport == "h3" },
         )
     }
 
@@ -415,11 +465,13 @@ class AutoPlannerTest {
     fun theFramingThatConnectedLastGoesFirstWherever() {
         assertEquals(
             AutoRoute.AETHER_H2_QUICK,
-            AutoPlanner.aetherLane(everything.copy(provenFraming = "h2")).first(),
+            AutoPlanner.aetherLane(everything.copy(provenFraming = "h2"))
+                .first { it.engineTransport == "h2" || it.engineTransport == "h3" },
         )
         assertEquals(
             AutoRoute.AETHER_H3_QUICK,
-            AutoPlanner.aetherLane(everything.copy(provenFraming = "h3", onMobileData = true)).first(),
+            AutoPlanner.aetherLane(everything.copy(provenFraming = "h3", onMobileData = true))
+                .first { it.engineTransport == "h2" || it.engineTransport == "h3" },
         )
     }
 
@@ -567,6 +619,21 @@ class AutoPlannerTest {
             val ran = AutoPlanner.engineConfig(base, route, deep = route.fullSearch)
             assertEquals(route, AutoRoute.ofEngineConfig(ran))
         }
+    }
+
+    /**
+     * WireGuard is in Automatic's lane, and a win there is remembered as that.
+     *
+     * The risk is silent and one-directional: read the wrong way, the network
+     * that just proved WireGuard works forgets it and starts every session with
+     * a MASQUE search that takes minutes to find an edge WireGuard already had.
+     */
+    @Test
+    fun anAutomaticWireGuardWinIsRememberedAsAutomatic() {
+        val base = """{"transport":"auto","scanMode":"balanced"}"""
+        val ran = AutoPlanner.engineConfig(base, AutoRoute.AETHER_WG, deep = false)
+
+        assertEquals(AutoRoute.AETHER_WG, AutoRoute.ofEngineConfig(ran))
     }
 
     /**

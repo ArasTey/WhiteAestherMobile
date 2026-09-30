@@ -172,7 +172,7 @@ class PsiphonService : Service() {
                 // tried, or whether it ever got tactics. So a short list of
                 // notice types crosses, capped per session, and the hundreds of
                 // per-server attempts are folded into one line of counts.
-                Log.d("psiphon", message)
+                debugLog("psiphon", Log.DEBUG, message)
                 handler.post { consider(message) }
             }
         }
@@ -279,7 +279,7 @@ class PsiphonService : Service() {
     private fun fail(reason: String) {
         state = State.FAILED
         failure = reason
-        Log.e("psiphon", reason)
+        debugLog("psiphon", Log.ERROR, reason)
         broadcast()
     }
 

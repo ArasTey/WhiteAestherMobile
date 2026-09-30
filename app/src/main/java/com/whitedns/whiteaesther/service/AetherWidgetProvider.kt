@@ -26,7 +26,15 @@ class AetherWidgetProvider : AppWidgetProvider() {
         widgetIds: IntArray,
     ) {
         val stage = EngineStatusStore.status.value.stage
-        widgetIds.forEach { manager.updateAppWidget(it, draw(context, stage)) }
+        // The receiver is exported -- a home-screen widget has to be -- and takes
+        // APPWIDGET_UPDATE, so any app on the phone can send it with ids it does
+        // not own. updateAppWidget throws SecurityException for those, and an
+        // exception out of onReceive takes the process with it: any app could
+        // crash this one at will. No privilege is gained either way, but a crash
+        // loop is not a thing to hand out.
+        for (id in widgetIds) {
+            runCatching { manager.updateAppWidget(id, draw(context, stage)) }
+        }
     }
 
     companion object {

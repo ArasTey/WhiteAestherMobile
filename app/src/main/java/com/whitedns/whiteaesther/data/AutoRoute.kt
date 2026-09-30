@@ -79,6 +79,20 @@ enum class AutoRoute(
     AETHER_H2_FULL("aether-h2-full", Carrier.AETHER, engineTransport = "h2", fullSearch = true),
 
     /**
+     * WireGuard, which leads the Automatic lane.
+     *
+     * It is the cheapest handshake the engine has and the one whose registration
+     * Cloudflare hands out most freely, so a network that can carry it gets out
+     * without an endpoint search. It is first rather than one rung among many
+     * because every rung below it is a MASQUE framing, and those all have to
+     * search for an edge first -- minutes where this one has already answered.
+     *
+     * Its own rung rather than [AETHER_AS_SET], which carries whatever the user
+     * fixed: Automatic has to reach WireGuard without asking anybody to set it.
+     */
+    AETHER_WG("aether-wg", Carrier.AETHER, engineTransport = "wg"),
+
+    /**
      * Two nested MASQUE hops, for a network that has learnt to recognise one.
      *
      * A quick search for the outer edge rather than a deep one: the outer hop
@@ -132,8 +146,17 @@ enum class AutoRoute(
                 }
                 "h3" -> if (json.optBoolean("encryptedHello")) AETHER_H3_ECH else AETHER_H3_QUICK
                 "mim" -> AETHER_MIM
-                // WireGuard or WARP-in-WARP, which the race only ever runs as
+                // WireGuard, or WARP-in-WARP, which the race only ever runs as
                 // the user set them.
+                //
+                // WireGuard is in Automatic's lane now, and a transport name
+                // alone cannot say who chose it -- but the depth can.
+                // Automatic's rung is searched quickly and the user's fixed
+                // transport is searched fully, and that is the one difference
+                // between the two that a configuration carries. Getting it
+                // backwards either forgets the network WireGuard just proved
+                // itself on, or hands a user back a rung they never asked for.
+                "wg" -> if (json.optString("scanMode") == "turbo") AETHER_WG else AETHER_AS_SET
                 else -> AETHER_AS_SET
             }
         }
@@ -451,7 +474,13 @@ object AutoPlanner {
             listOf(AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH)
         }
         val lane = if (options.engineCanSearchDeeper) {
-            plain + tactics + listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
+            // WireGuard leads, then the MASQUE framings in the order this
+            // network suggests. Only when the transport is Automatic -- which is
+            // what `engineCanSearchDeeper` means -- because otherwise the user
+            // has said which tunnel they want and AETHER_AS_SET below already
+            // carries it.
+            listOf(AutoRoute.AETHER_WG) + plain + tactics +
+                listOf(AutoRoute.AETHER_H2_FULL, AutoRoute.AETHER_MIM)
         } else {
             // A transport the user fixed -- WireGuard, say -- leads, searched
             // as they set it: it is what they have said about their network.
@@ -591,6 +620,11 @@ object AutoPlanner {
         // costs what a quick rung costs.
         AutoRoute.AETHER_H2_FRAGMENT, AutoRoute.AETHER_H3_ECH -> 75_000L
         AutoRoute.AETHER_H2_FULL -> 180_000L
+        // WireGuard leads the lane, so it has to be cheap enough not to eat the
+        // window the carriers behind it need. Its handshake is the shortest the
+        // engine has; what it waits on is the registration and the search for
+        // an edge, which the other engine rungs wait on too.
+        AutoRoute.AETHER_WG -> 75_000L
         // An outer tunnel, then up to six inner handshakes at twelve seconds
         // each. The search for the outer edge is the quick one, so this is
         // mostly the inner tries.

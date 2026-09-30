@@ -11,7 +11,8 @@ Rust/NDK build, so it is the fast loop for this work.
 The port is built. Four tabs -- Home / Routes / Traffic / Settings -- with
 Endpoint under Routes and Diagnostics, Identity and About under Settings.
 
-- **Fonts.** `res/font/` has `inter_{regular,medium,semibold,bold}.ttf` and
+- **Fonts.** `res/font/` has `ui_{regular,medium,semibold,bold}.ttf` (the UI
+  face), `fa_{regular,medium,semibold,bold}.ttf` (the Persian face) and
   `plex_mono_{regular,medium}.ttf`. Inter ships as a variable woff2 and Android
   wants plain TTF, so `design/make-android-fonts.py` instantiates each
   weight. Re-run it if the weights change.

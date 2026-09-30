@@ -13,12 +13,15 @@ import com.whitedns.whiteaesther.core.MoatClient
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.core.NativeAetherBridge
 import com.whitedns.whiteaesther.core.PsiphonConfig
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.AddressReporter
 import com.whitedns.whiteaesther.data.AppRelease
 import com.whitedns.whiteaesther.data.AppUpdateManager
 import com.whitedns.whiteaesther.data.UpdateDownload
 import com.whitedns.whiteaesther.data.AppSettings
 import com.whitedns.whiteaesther.data.EndpointMode
+import com.whitedns.whiteaesther.data.EndpointScanOutcome
+import com.whitedns.whiteaesther.data.EndpointScanReporting
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.TunnelProtocol
@@ -43,10 +46,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Something the bridge fetch has to say, and whether it is a fault.
@@ -63,6 +68,15 @@ enum class EndpointOperation {
     SCANNING,
     TESTING,
     CANCELLING,
+
+    /**
+     * Buying the engine's identity through a carrier, before any search.
+     *
+     * Not [SCANNING]: nothing is being scanned yet, and telling the user
+     * otherwise would make a search that has not started look like one that is
+     * going badly.
+     */
+    GETTING_KEY,
 }
 
 data class EndpointScannerState(
@@ -70,6 +84,8 @@ data class EndpointScannerState(
     val results: List<EndpointScanResult> = emptyList(),
     val message: String? = null,
     val error: String? = null,
+    /** What the engine's words turned out to mean. See [EndpointScanReporting]. */
+    val outcome: EndpointScanOutcome? = null,
 )
 
 /**
@@ -241,6 +257,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * this architecture -- and carries the assets to fetch.
      */
     private val mutableInstallable = MutableStateFlow<AppRelease?>(null)
+
+    /**
+     * Whether the update check has already run this process.
+     *
+     * A release cannot appear and the installed APK cannot change its
+     * architecture while the app is running, so a second check in the same
+     * process can only repeat work.
+     */
+    private var installableChecked = false
+
+    /**
+     * Whether this phone already holds a key the engine can use.
+     *
+     * Null until it has been asked. The question is answered from the engine's
+     * own store, so it is a fact rather than a guess -- and it is the difference
+     * between showing someone a step they do not need and hiding one they do.
+     */
+    private val mutableHasKey = MutableStateFlow<Boolean?>(null)
+    val hasKey: StateFlow<Boolean?> = mutableHasKey.asStateFlow()
+
+    /** Re-asks the engine. Cheap: a read of the store, no network. */
+    fun refreshHasKey(settings: AppSettings) {
+        viewModelScope.launch {
+            mutableHasKey.value = withContext(Dispatchers.IO) {
+                runCatching {
+                    NativeAetherBridge.hasIdentity(
+                        settings.copy(endpointMode = EndpointMode.AUTOMATIC).toNativeJson(getApplication()),
+                    )
+                }.getOrDefault(false)
+            }
+        }
+    }
     val installable = mutableInstallable.asStateFlow()
 
     private val mutableDownload = MutableStateFlow<UpdateDownload>(UpdateDownload.Idle)
@@ -460,13 +508,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             // an unprotected socket would tell the network this
                             // device runs a circumvention tool; inside the
                             // tunnel it is just more session traffic.
-                            mutableInstallable.value = runCatching {
-                                updates.check(acceptPrereleases = false)
-                            }.getOrNull()
-                            mutableUpdate.value = UpdateChecker.check(
-                                getApplication(),
-                                BuildConfig.VERSION_NAME,
-                            )
+                            //
+                            // Once per session at most. This ran on every
+                            // CONNECTED transition -- so every connect and
+                            // every reconnect -- and each run fetched a JSON
+                            // release listing over a fresh TLS connection and
+                            // then opened the installed ~40 MB APK as a ZipFile
+                            // to read its architecture back out. That is a
+                            // large HTTPS round trip and a full archive
+                            // central-directory walk to answer a question whose
+                            // answer cannot have changed while the process is
+                            // alive. UpdateChecker already throttles itself to
+                            // once a day; this one did not throttle at all.
+                            if (!installableChecked) {
+                                installableChecked = true
+                                mutableInstallable.value = runCatching {
+                                    updates.check(acceptPrereleases = false)
+                                }.getOrNull()
+                                mutableUpdate.value = UpdateChecker.check(
+                                    getApplication(),
+                                    BuildConfig.VERSION_NAME,
+                                )
+                            }
                         }
                         EngineStage.IDLE -> {
                             mutableAddresses.value = mutableAddresses.value.copy(tunnel = null)
@@ -517,6 +580,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * to know -- so it asks with what it has, which is the kind of network the
      * phone is on. Getting only that half right still beats a third rule.
      */
+    /**
+     * The framings worth searching after the first one found nothing.
+     *
+     * H2 probes over TCP and H3 over QUIC, because the MASQUE prober takes its
+     * transport from the framing it is handed. So one search covers one of
+     * them, and a network that blocks UDP returns nothing at all for the other
+     * -- which is what Iranian mobile users were seeing reported as an empty
+     * network. Hence the sweep rather than a single answer.
+     *
+     * Nested MASQUE probes over QUIC, like H3, because its hops are H3 unless
+     * the whole profile is H2, so the sweep worth making after it is the TCP
+     * one over the same edges.
+     *
+     * WireGuard and WARP-in-WARP have no second framing. Their endpoints are
+     * their own, so offering MASQUE addresses here would list addresses the
+     * chosen protocol cannot use.
+     */
+    private fun sweepOf(settings: AppSettings): List<TunnelProtocol> =
+        when (settings.transport) {
+            TunnelProtocol.H3 -> listOf(TunnelProtocol.H2)
+            TunnelProtocol.H2 -> listOf(TunnelProtocol.H3)
+            TunnelProtocol.MASQUE_IN_MASQUE -> listOf(TunnelProtocol.H2)
+            TunnelProtocol.WIREGUARD, TunnelProtocol.WARP_IN_WARP -> emptyList()
+            // Automatic is resolved before this is asked, so reaching here
+            // means the planner answered with something that is not a framing.
+            // Sweeping both is still the useful move.
+            TunnelProtocol.AUTO -> listOf(TunnelProtocol.H3, TunnelProtocol.H2)
+        }
+
     private fun scanFirstFraming(): TunnelProtocol {
         val cellular = runCatching {
             NetworkKey.isCellular(NetworkIdentity.current(getApplication()).key.orEmpty())
@@ -829,59 +921,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun scanEndpoints(settings: AppSettings) {
         if (!canRunEndpointOperation()) return
+        // No key, no search. A scan without an identity cannot succeed, and
+        // running one anyway is what left this screen reporting "no endpoints"
+        // on a network whose real problem was a missing registration. The check
+        // is here as well as on the button so nothing else can start one.
+        if (mutableHasKey.value != true) {
+            mutableEndpointScannerState.value = EndpointScannerState(
+                results = mutableEndpointScannerState.value.results,
+                message = say(R.string.msg_key_needed_first),
+            )
+            return
+        }
         endpointJob = viewModelScope.launch {
             mutableEndpointScannerState.value = EndpointScannerState(
                 operation = EndpointOperation.SCANNING,
                 results = mutableEndpointScannerState.value.results,
                 message = say(R.string.msg_scanning_routes, say(settings.transport.probedAs.label)),
             )
-            val base = settings
-                .copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
-                // The bridge takes a real transport, and which one is not this
-                // screen's decision to make: asking the planner is what keeps a
-                // scan looking for what a connect would actually try. Scanning
-                // H2 first regardless was a third answer to that question, and
-                // it disagreed with the race on Wi-Fi.
-                .let {
-                    if (!it.transport.isAutomatic) it else {
-                        it.copy(transport = scanFirstFraming())
-                    }
-                }
-            var result = withContext(Dispatchers.IO) {
-                NativeAetherBridge.scan(base.toNativeJson(getApplication()))
+val base = settings.copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint = "")
+            // The transports to search, in the order to search them.
+            //
+            // The bridge takes a real transport and refuses "auto" outright, so
+            // the ladder is built here where the planner can be asked. On the
+            // default it is WireGuard first, for the reason the race gives it
+            // first: it has a fixed peer and does not search for an edge at all,
+            // and every rung behind it is a MASQUE framing that has to find one.
+            // Then the framings, in the order this network suggests.
+            //
+            // De-duplicated across the whole thing, because the sweep is
+            // written in both directions: on a network where the planner leads
+            // with H3, "H3 then H2" and the sweep would hand back H3 twice,
+            // and searching one framing for a second minute is the slowest way
+            // to find nothing.
+            //
+            // A transport the user fixed is searched on its own, as they set it.
+            val ladder: List<TunnelProtocol> = if (!settings.transport.isAutomatic) {
+                listOf(settings.transport)
+            } else {
+                (listOf(TunnelProtocol.WIREGUARD, scanFirstFraming()) + sweepOf(settings))
+                    .distinct()
             }
-            // The MASQUE prober picks TCP or UDP from the framing it is handed:
-            // H2 probes over TCP, H3 over QUIC. Scanning with the configured one
-            // therefore searches UDP only on the default profile, and a network
-            // that blocks UDP returns nothing at all -- which is what Iranian
-            // mobile users were seeing. Sweep the other rather than reporting an
-            // empty network.
-            val other = when (base.transport) {
-                // Reached only if the planner ever answers with something that
-                // is not a framing; sweeping the other one is still the useful
-                // move.
-                TunnelProtocol.AUTO -> TunnelProtocol.H3
-                TunnelProtocol.H3 -> TunnelProtocol.H2
-                TunnelProtocol.H2 -> TunnelProtocol.H3
-                // Nested MASQUE probes over QUIC, like H3, because its hops
-                // are H3 unless the whole profile is H2. So the sweep worth
-                // making after it is the TCP one, over the same edges.
-                TunnelProtocol.MASQUE_IN_MASQUE -> TunnelProtocol.H2
-                // Neither WireGuard nor its nested form has another framing to
-                // sweep. Their endpoints are their own, so falling back to
-                // MASQUE would list addresses the chosen protocol cannot use.
-                TunnelProtocol.WIREGUARD, TunnelProtocol.WARP_IN_WARP -> null
-            }
-            if (other != null &&
-                result.getOrNull()?.isEmpty() != false &&
-                mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING
-            ) {
-                mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
-                    message = say(R.string.msg_nothing_over_trying, say(base.transport.label), say(other.label)),
-                )
-                result = withContext(Dispatchers.IO) {
-                    NativeAetherBridge.scan(base.copy(transport = other).toNativeJson(getApplication()))
+
+            var result: Result<List<EndpointScanResult>> = Result.success(emptyList())
+            for ((index, transport) in ladder.withIndex()) {
+                if (mutableEndpointScannerState.value.operation != EndpointOperation.SCANNING) break
+                val attempt = withContext(Dispatchers.IO) {
+                    NativeAetherBridge.scan(base.copy(transport = transport).toNativeJson(getApplication()))
                 }
+                // The MASQUE prober picks TCP or UDP from the framing it is
+                // handed, so one sweep searches only one of them. Carry on
+                // rather than reporting an empty network.
+                if (attempt.getOrNull()?.isEmpty() != false && index < ladder.lastIndex) {
+                    val next = ladder[index + 1]
+                    mutableEndpointScannerState.value = mutableEndpointScannerState.value.copy(
+                        message = say(
+                            R.string.msg_nothing_over_trying,
+                            say(transport.label),
+                            say(next.label),
+                        ),
+                    )
+                    result = attempt
+                    continue
+                }
+                result = attempt
+                break
             }
             result.fold(
                 onSuccess = { endpoints ->
@@ -890,10 +993,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             results = mutableEndpointScannerState.value.results,
                             message = say(R.string.msg_scan_cancelled),
                         )
+                    } else if (endpoints.isEmpty()) {
+                        // The search finished and nothing answered. That is a
+                        // result, and a different one from "the search broke":
+                        // the network worked, there was simply no way out from
+                        // here. It carries its own advice, so it is not shown as
+                        // an error.
+                        mutableEndpointScannerState.value = EndpointScannerState(
+                            results = emptyList(),
+                            message = say(R.string.msg_scan_nothing_answered),
+                            outcome = EndpointScanOutcome.NOTHING_ANSWERED,
+                        )
                     } else {
+                        // A search that returned endpoints means an identity was
+                        // already there. Say so, so the key step stops being
+                        // offered to someone who does not need it.
+                        mutableHasKey.value = true
                         mutableEndpointScannerState.value = EndpointScannerState(
                             results = endpoints,
-                            message = "${endpoints.size} validated endpoint${if (endpoints.size == 1) "" else "s"} found",
+                            message = getApplication<Application>().resources
+                                .getQuantityString(
+                                    R.plurals.msg_scan_found,
+                                    endpoints.size,
+                                    endpoints.size,
+                                ),
                         )
                     }
                 },
@@ -904,10 +1027,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             message = say(R.string.msg_scan_cancelled),
                         )
                     } else if (mutableEndpointScannerState.value.operation == EndpointOperation.SCANNING) {
-                        mutableEndpointScannerState.value = EndpointScannerState(
-                            results = mutableEndpointScannerState.value.results,
-                            error = error.message ?: say(R.string.msg_scan_failed),
-                        )
+                        // What the engine says is written for an engineer.
+                        // Passed through, it reached the screen as a red URL and
+                        // a socket error, inside the card that is supposed to
+                        // list endpoints. Classify it and say the part a person
+                        // can act on. The engine's own wording stays in the
+                        // diagnostics report, where it belongs.
+                        val outcome = EndpointScanReporting.classify(error.message)
+                        val kept = mutableEndpointScannerState.value.results
+                        mutableEndpointScannerState.value =
+                            if (EndpointScanReporting.isProgress(outcome)) {
+                                // Still retrying rather than failed: not an error,
+                                // and not a result either. The search has not
+                                // concluded.
+                                EndpointScannerState(
+                                    results = kept,
+                                    message = say(R.string.msg_scan_still_working),
+                                    outcome = outcome,
+                                )
+                            } else {
+                                EndpointScannerState(
+                                    results = kept,
+                                    message = say(
+                                        when (outcome) {
+                                            EndpointScanOutcome.NETWORK_UNREACHABLE ->
+                                                R.string.msg_scan_network_unreachable
+                                            EndpointScanOutcome.NOTHING_ANSWERED ->
+                                                R.string.msg_scan_nothing_answered
+                                            else -> R.string.msg_scan_failed
+                                        },
+                                    ),
+                                    // Only the engine's raw wording goes to the
+                                    // error slot, and only when it said something
+                                    // we do not recognise -- where hiding it would
+                                    // lose the only clue there is.
+                                    error = if (outcome == EndpointScanOutcome.UNKNOWN) {
+                                        error.message
+                                    } else {
+                                        null
+                                    },
+                                    outcome = outcome,
+                                )
+                            }
                     }
                 },
             )
@@ -949,6 +1110,124 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 },
             )
         }
+    }
+
+/**
+     * Asks Cloudflare for this phone's key, over whatever network is there.
+     *
+     * That is the whole of it. The previous version checked whether one of *this
+     * app's own* carriers had a SOCKS port open before making any request at
+     * all, and on a phone whose VPN belongs to some other app that check is
+     * always false -- so the button produced no request, only the sentence
+     * "turn your VPN on first", however the user had their VPN arranged. It also
+     * ran the request as a job on a service it then stopped on the very next
+     * line, which cancelled that job before it did anything.
+     *
+     * The engine issues an ordinary request to `api.cloudflareclient.com` and
+     * stores what comes back. Whether that leaves depends on the network the
+     * phone is on, and if the user has turned their own VPN on it simply leaves
+     * through it -- which is the ordinary way every other request on a phone
+     * works, and is not this app's business to inspect.
+     *
+     * It stops at the key. The endpoint search is a separate press, because the
+     * search is thousands of probes and is worth running on a network the user
+     * has chosen, not on the one they borrowed a key through.
+     */
+    fun getKey(settings: AppSettings) {
+        if (!canRunEndpointOperation()) return
+        // Already answered: there is no key to fetch. Saying so plainly is the
+        // whole response -- searching here would be the chained behaviour this
+        // deliberately does not do.
+        if (mutableHasKey.value == true) {
+            mutableEndpointScannerState.value = EndpointScannerState(
+                results = mutableEndpointScannerState.value.results,
+                message = say(R.string.msg_key_already_have),
+            )
+            return
+        }
+        endpointJob = viewModelScope.launch {
+            mutableEndpointScannerState.value = EndpointScannerState(
+                operation = EndpointOperation.GETTING_KEY,
+                results = mutableEndpointScannerState.value.results,
+                message = say(R.string.msg_key_asking),
+            )
+// Automatic has to become a real transport first. The engine refuses
+            // the name outright -- `transport must be h3, h2, wg, wiw or mim` --
+            // and the service is what normally resolves it, so a call made from
+            // here rather than through the service arrived with "auto" still on
+            // it and was refused before a single request left the phone. That is
+            // the default setting, so it was every press, not an edge case.
+            //
+            // Both families are registered, not just the one the user is on, so
+            // that changing the protocol afterwards is not a second trip to this
+            // button. They cannot be one registration: MASQUE enrols onto its
+            // device with `PATCH /reg/{id}`, which overwrites the same `key`
+            // field the Curve25519 public key filled, and Cloudflare is then
+            // left with no WireGuard key for it. Two registrations, once per
+            // install, is what "works for every protocol" actually costs.
+            //
+            // Each is a separate call because the engine refuses to provision
+            // two at once, and the engine loads what it already holds before
+            // asking for anything -- so a second press costs a round trip, not
+            // another registration.
+            val families = listOf(
+                if (!settings.transport.isAutomatic) {
+                    settings.transport
+                } else {
+                    scanFirstFraming()
+                },
+                TunnelProtocol.WIREGUARD,
+            ).distinct()
+            var lastFailure: Throwable? = null
+            var gotOne = false
+            for (transport in families) {
+                val attempt = withContext(Dispatchers.IO) {
+                    NativeAetherBridge.provision(
+                        settings.copy(transport = transport).toNativeJson(getApplication()),
+                    )
+                }
+                attempt.fold(
+                    onSuccess = { gotOne = true },
+                    onFailure = { error -> if (lastFailure == null) lastFailure = error },
+                )
+            }
+
+            if (gotOne) {
+                mutableHasKey.value = true
+                // Stop here. The next action is the user's: turn their own VPN
+                // off, then search for endpoints on a clean network.
+                mutableEndpointScannerState.value = EndpointScannerState(
+                    results = mutableEndpointScannerState.value.results,
+                    message = say(R.string.msg_key_ready),
+                )
+                return@launch
+            }
+
+            val error = lastFailure
+            if (error == null) return@launch
+            // A failed registration leaves a wait behind on this address, and
+            // the next press is refused before any request is made. Telling a
+            // user to check their connection then is wrong twice over: the
+            // network is fine, and pressing again only lengthens the wait. Say
+            // what is actually happening.
+            val held = EndpointScanReporting.isProgress(
+                EndpointScanReporting.classify(error.message),
+            )
+            mutableEndpointScannerState.value = EndpointScannerState(
+                results = mutableEndpointScannerState.value.results,
+                message = say(if (held) R.string.msg_key_waiting else R.string.msg_key_failed),
+            )
+        }
+    }
+
+    /** Stops a key purchase that is still in flight. */
+    fun cancelKeyPreparation() {
+        endpointJob?.cancel()
+        NativeAetherBridge.cancelPrepare()
+        mutableEndpointScannerState.value = EndpointScannerState(
+            results = mutableEndpointScannerState.value.results,
+            message = say(R.string.msg_scan_cancelled),
+        )
     }
 
     fun cancelEndpointScan() {

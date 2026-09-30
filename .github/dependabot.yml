@@ -63,6 +63,7 @@ updates:
           - "*"
     ignore:
       # The tag on this action is the Rust toolchain version, which the
-      # workflow pins deliberately through RUST_VERSION. Bumping the tag
-      # silently changes the compiler.
+      # workflow pins deliberately, and which native/rust-toolchain.toml
+      # pins as channel "1.98.0". Bumping the tag silently changes the
+      # compiler and leaves the two disagreeing.
       - dependency-name: dtolnay/rust-toolchain

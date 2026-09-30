@@ -64,7 +64,7 @@ class PluggableTransport(
         // milliseconds when it arrives at all.
         while (System.currentTimeMillis() < deadline) {
             val line = runCatching { reader.readLine() }.getOrNull() ?: break
-            Log.d("pt", line)
+            debugLog("pt", Log.DEBUG, line)
             val parts = line.trim().split(' ')
             when (parts.firstOrNull()) {
                 // CMETHOD <transport> <protocol> <address:port> [options]
@@ -73,7 +73,7 @@ class PluggableTransport(
                 // The proxy refusing one transport is not the proxy failing:
                 // the others may still be listening, so this is recorded and
                 // the loop continues to CMETHODS DONE.
-                "CMETHOD-ERROR" -> Log.w("pt", line)
+                "CMETHOD-ERROR" -> debugLog("pt", Log.WARN, line)
                 "ENV-ERROR", "VERSION-ERROR" -> {
                     stop()
                     return emptyMap()

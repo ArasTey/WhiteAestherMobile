@@ -1,15 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Nothing leaves the device by backup.
+
+    The four domains below cover everything the app writes today: identity lives
+    in filesDir, DataStore and SharedPreferences are in file and sharedpref.
+    The remaining domains are excluded as well, so the guarantee keeps holding
+    if anything is ever added to external storage or to device-protected
+    storage. Neither is used now, and neither would have been covered by the
+    rules as they stood.
+-->
 <data-extraction-rules>
     <cloud-backup disableIfNoEncryptionCapabilities="true">
         <exclude domain="root" path="." />
         <exclude domain="file" path="." />
         <exclude domain="database" path="." />
         <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="." />
         <exclude domain="file" path="." />
         <exclude domain="database" path="." />
         <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
     </device-transfer>
 </data-extraction-rules>

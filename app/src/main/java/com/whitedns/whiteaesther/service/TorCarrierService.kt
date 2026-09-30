@@ -204,7 +204,7 @@ class TorCarrierService : android.app.Service() {
                 return
             }
             transport = proxy
-            Log.i("tor", "$wanted is listening on $listening")
+            debugLog("tor", Log.INFO, "$wanted is listening on $listening")
         }
 
         runCatching {
@@ -287,7 +287,7 @@ class TorCarrierService : android.app.Service() {
                     .orEmpty()
                 if (phase.contains("PROGRESS=100") || phase.contains("TAG=done")) {
                     state = State.CONNECTED
-                    Log.i("tor", "bootstrapped")
+                    debugLog("tor", Log.INFO, "bootstrapped")
                     broadcast()
                     return@Thread
                 }
@@ -297,7 +297,7 @@ class TorCarrierService : android.app.Service() {
                 // Not a failure of ours to report as one: the session above has
                 // its own deadline and a better message for it. Left CONNECTING
                 // so that deadline is what decides.
-                Log.w("tor", "still bootstrapping after ${BOOTSTRAP_TIMEOUT_MS / 1000}s")
+                debugLog("tor", Log.WARN, "still bootstrapping after ${BOOTSTRAP_TIMEOUT_MS / 1000}s")
             }
         }
         bootstrapWatcher = watcher
@@ -323,7 +323,7 @@ class TorCarrierService : android.app.Service() {
     private fun fail(reason: String) {
         state = State.FAILED
         failure = reason
-        Log.e("tor", reason)
+        debugLog("tor", Log.ERROR, reason)
         broadcast()
     }
 

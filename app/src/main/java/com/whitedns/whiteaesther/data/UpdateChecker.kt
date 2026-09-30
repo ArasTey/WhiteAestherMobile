@@ -1,7 +1,9 @@
 package com.whitedns.whiteaesther.data
 
 import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -31,7 +33,12 @@ object UpdateChecker {
     /** Once a day is often enough for something released every few weeks. */
     private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
 
-    private val Context.updateStore by preferencesDataStore(name = "whiteaesther_updates")
+    private val Context.updateStore by preferencesDataStore(
+        name = "whiteaesther_updates",
+        // See SettingsRepository: an unreadable file must not become an
+        // exception on a flow the UI collects at launch.
+        corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+    )
     private val LAST_CHECKED = longPreferencesKey("last_checked")
     private val DISMISSED_VERSION = stringPreferencesKey("dismissed_version")
 

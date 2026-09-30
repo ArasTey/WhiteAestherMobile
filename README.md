@@ -125,9 +125,14 @@ cd WhiteAestherMobile
 ./gradlew assembleStableDebug
 ```
 
-Needs JDK 21, Android SDK 36 with NDK `29.0.14206865` and CMake 3.22.1, and Rust
-1.88.0 with the Android targets plus `cargo-ndk`. The Gradle build compiles the
+Needs JDK 21, Android SDK 37 with NDK `29.0.14206865` and CMake 3.22.1, and Rust
+1.98.0 with the Android targets plus `cargo-ndk`. The Gradle build compiles the
 Rust bridge itself.
+
+SDK 37 is the *compile* SDK, not the one the app targets: tor-android needs it to
+compile, and `targetSdk` is deliberately still 36. Raise that separately and
+deliberately — it changes the behaviour of every permission and background rule
+in the app.
 
 `./gradlew :app:compileStableDebugKotlin` skips the native build and is the fast
 loop when only touching Kotlin.

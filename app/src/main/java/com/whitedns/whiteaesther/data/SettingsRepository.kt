@@ -2,10 +2,12 @@ package com.whitedns.whiteaesther.data
 
 import android.content.Context
 import androidx.datastore.core.DataMigration
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -16,6 +18,18 @@ import kotlinx.coroutines.flow.map
 private val Context.settingsDataStore by preferencesDataStore(
     name = "whiteaesther_settings",
     produceMigrations = { listOf(AutomaticCarrierMigration) },
+    // An unreadable file becomes default settings.
+    //
+    // Without this, corruption surfaces as an exception on the `data` flow,
+    // which MainViewModel collects in viewModelScope and MainActivity collects
+    // from it -- so a truncated file, or a filesystem that lost the atomic
+    // rename, took the app down on launch with no way back in. Losing settings
+    // is recoverable; failing to start is not.
+    //
+    // The parameter is the handler itself, not a producer: `preferencesDataStore`
+    // takes (name, corruptionHandler, produceMigrations, scope), unlike
+    // PreferenceDataStoreFactory.create which takes `produceCorruptionHandler`.
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
 )
 
 /**
@@ -77,7 +91,11 @@ class SettingsRepository(private val context: Context) {
             psiphonRegion = preferences[PSIPHON_REGION].orEmpty(),
             torBridge = enumValueOrDefault(preferences[TOR_BRIDGE], TorBridge.NONE),
             torBridges = preferences[TOR_BRIDGES].orEmpty(),
-            scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.BALANCED),
+            // The default here and not only on the data class: this is the value a
+            // phone with nothing stored reads, and a mismatch between the two
+            // showed "Manual" on a fresh install whose transport and scan
+            // were plainly the ones Adaptive is.
+            scanStrategy = enumValueOrDefault(preferences[SCAN], ScanStrategy.AUTO),
             dualStack = preferences[DUAL_STACK] ?: true,
             validationEnabled = preferences[VALIDATION] ?: true,
             noizeProfile = preferences[NOIZE] ?: "firewall",

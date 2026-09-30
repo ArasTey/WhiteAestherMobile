@@ -68,6 +68,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import com.whitedns.whiteaesther.core.CarrierStage
 import com.whitedns.whiteaesther.data.Carrier
+import com.whitedns.whiteaesther.data.DiagnosticsRedaction
 import com.whitedns.whiteaesther.core.TorBridges
 import com.whitedns.whiteaesther.data.TorBridge
 import com.whitedns.whiteaesther.data.EndpointAddress
@@ -119,7 +120,7 @@ enum class ConnectionProfile(
         R.string.profile_adaptive,
         R.string.works_on_most_networks_start_here,
         R.string.profile_recommended,
-        ScanStrategy.BALANCED,
+        ScanStrategy.AUTO,
         TunnelProtocol.AUTO,
     ),
     PATCHY(
@@ -500,10 +501,17 @@ fun HomeScreen(
         // Only route out of a blocked phone. Reached from the notification
         // too, but a user who opens the app first should not have to find the
         // notification again to undo something the app is doing.
-        if (status.message == stringResource(R.string.traffic_is_blocked)) {
+        //
+        // Matched on containment as well as equality, because the path this
+        // exists for does not produce a bare message: giveUp joins the blocking
+        // notice to the reason it gave up, so the string arrives inside a
+        // sentence. Testing for equality hid the only control that undoes the
+        // block at the moment it was needed most.
+        val blockedNotice = stringResource(R.string.traffic_is_blocked)
+        if (status.message == blockedNotice || status.message.contains(blockedNotice)) {
             AetherCard {
                 CardHead(
-                    stringResource(R.string.traffic_is_blocked),
+                    blockedNotice,
                     stringResource(R.string.nothing_reaches_the_internet_until_you_connect),
                 )
                 Box(Modifier.padding(11.dp)) {
@@ -1360,6 +1368,7 @@ fun RoutesScreen(
                             code = (index + 1).toString(),
                             title = stringResource(strategy.label),
                             subtitle = when (strategy) {
+                                ScanStrategy.AUTO -> stringResource(R.string.automatic_decides_per_network)
                                 ScanStrategy.TURBO -> stringResource(R.string.fastest_fewest_endpoints_tested)
                                 ScanStrategy.BALANCED -> stringResource(R.string.default_a_good_result_in_a_few)
                                 ScanStrategy.THOROUGH -> stringResource(R.string.tests_more_endpoints_before_choosing)
@@ -1385,6 +1394,9 @@ fun EndpointScreen(
     scannerState: EndpointScannerState,
     onSettingsChange: (AppSettings) -> Unit,
     onScanEndpoints: (AppSettings) -> Unit,
+    onGetKey: (AppSettings) -> Unit,
+    onCancelKeyPreparation: () -> Unit,
+    hasKey: Boolean?,
     onTestEndpoint: (AppSettings) -> Unit,
     onResetEndpoint: (AppSettings) -> Unit,
     onCancelEndpointScan: () -> Unit,
@@ -1429,7 +1441,7 @@ fun EndpointScreen(
                 SegGroup(
                     options = listOf(false, true),
                     selected = custom,
-                    label = { if (it) stringResource(R.string.specific_address) else "Automatic" },
+                    label = { if (it) stringResource(R.string.specific_address) else stringResource(R.string.endpoint_automatic) },
                     onSelect = { wantCustom ->
                         onSettingsChange(
                             settings.copy(
@@ -1500,6 +1512,15 @@ fun EndpointScreen(
             }
         }
 
+        // Something on this page is working, and none of the words below will
+        // change until it does. Without this the only sign of it is text that
+        // sits exactly as it did before the button was pressed.
+        if (scannerState.operation != null) {
+            Spacer(Modifier.height(10.dp))
+            LoadingLine()
+            Spacer(Modifier.height(14.dp))
+        }
+
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             OutlineButton(
@@ -1545,6 +1566,35 @@ fun EndpointScreen(
                 onResetEndpoint(settings)
             },
         )
+
+        // Everything this screen needs to say about the key, in one line and one
+        // button. It used to be two "step" cards, a chat log of what had
+        // happened, and a paragraph explaining the button underneath it -- none
+        // of which told anyone more than the single sentence they came for.
+        Spacer(Modifier.height(12.dp))
+        when {
+            scannerState.operation == EndpointOperation.GETTING_KEY -> OutlineButton(
+                text = stringResource(R.string.stop),
+                modifier = Modifier.fillMaxWidth().testTag("cancel-key-button"),
+                enabled = true,
+                onClick = onCancelKeyPreparation,
+            )
+
+            // Key in hand. The search is a separate press, and it wants a
+            // network this app's carrier is not sitting in the middle of.
+            hasKey == true -> KeyNotice(stringResource(R.string.key_have_turn_vpn_off))
+
+            else -> {
+                KeyNotice(stringResource(R.string.turn_your_vpn_on))
+                Spacer(Modifier.height(9.dp))
+                PrimaryButton(
+                    text = stringResource(R.string.get_my_key),
+                    modifier = Modifier.fillMaxWidth().testTag("get-key-button"),
+                    enabled = !engineBusy,
+                    onClick = { onGetKey(settings) },
+                )
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
         AetherCard {
@@ -1608,7 +1658,13 @@ fun EndpointScreen(
             }
         }
         Note(
-            stringResource(R.string.only_endpoints_that_pass_the_settings_transport, settings.transport.probedAs.label),
+            // `label` is a string resource id, so it has to be resolved before
+            // it is passed on. Handing the Int straight to the outer call is
+            // what put a bare resource number in the middle of this sentence.
+            stringResource(
+                R.string.only_endpoints_that_pass_the_settings_transport,
+                stringResource(settings.transport.probedAs.label),
+            ),
         )
     }
 }
@@ -2799,12 +2855,6 @@ private fun CheckRow(
 
 private fun deviceLine(): String = "${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}"
 
-private val IPV4 = Regex("""\b\d{1,3}(\.\d{1,3}){3}\b(:\d+)?""")
-private val IPV6 = Regex("""\[[0-9a-fA-F:]+](:\d+)?""")
-
-private fun redactAddresses(line: String): String =
-    IPV6.replace(IPV4.replace(line, "0.0.0.0:port"), "[ipv6]:port")
-
 private fun buildReport(
     settings: AppSettings,
     nativeVersion: String?,
@@ -2828,7 +2878,7 @@ private fun buildReport(
         appendLine()
         entries.takeLast(120).forEach { entry ->
             val line = "${entry.formattedTime()} ${entry.level} ${entry.tag} ${entry.message}"
-            appendLine(if (redact) redactAddresses(line) else line)
+            appendLine(if (redact) DiagnosticsRedaction.redact(line) else line)
         }
     }
     if (redact) {

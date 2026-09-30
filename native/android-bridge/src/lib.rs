@@ -5,6 +5,7 @@ mod chain;
 mod chain_jni;
 mod tun;
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -733,6 +734,28 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeIdentityState(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let result = read_java_string(&mut env, &config)
+            .and_then(|raw| {
+                let config = BridgeConfig::parse(&raw)?;
+                let embedded = config.embedded(None)?;
+                Ok(response(
+                    true,
+                    serde_json::json!({ "present": aether::identity_present(&embedded) }),
+                ))
+            })
+            .unwrap_or_else(error_response);
+        java_string(env, &result)
+    }))
+    .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_nativeScan(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
@@ -870,6 +893,15 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
     listener: JObject<'_>,
 ) -> jstring {
     install_logger();
+    // Whether this call is the one holding the stop channel.
+    //
+    // The failure path below clears it so a half-built engine cannot leave a
+    // stop channel nobody owns. It has to clear only the one this call
+    // installed: the "already running" refusal returns before installing
+    // anything, and clearing unconditionally took the *running* engine's
+    // channel with it. nativeStop then answered false while the tunnel stayed
+    // up, and the only way back was for the engine to end on its own.
+    let armed = Cell::new(false);
     catch_unwind(AssertUnwindSafe(|| {
         let result = (|| -> Result<String, String> {
             let raw = read_java_string(&mut env, &config)?;
@@ -892,6 +924,7 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
                     return Err("engine is already running".into());
                 }
                 *sender = Some(stop_tx);
+                armed.set(true);
             }
 
             let (endpoint, pump) = if config.mode == "tun" {
@@ -945,7 +978,9 @@ pub extern "system" fn Java_com_whitedns_whiteaesther_core_NativeAetherBridge_na
             Ok(response(true, serde_json::json!({"stopped": true})))
         })()
         .unwrap_or_else(|error| {
-            STOP_SENDER.lock().take();
+            if armed.get() {
+                STOP_SENDER.lock().take();
+            }
             error_response(error)
         });
         java_string(env, &result)
@@ -1019,6 +1054,71 @@ mod tests {
 
     fn config(extra: &str) -> String {
         format!(r#"{{"mode":"proxy","configPath":"aether.toml","listenPort":1819{extra}}}"#)
+    }
+
+    /// The "already running" refusal must not take the running engine's stop
+    /// channel with it.
+    ///
+    /// nativeRun cleans up after itself by clearing STOP_SENDER when anything
+    /// fails, and that cleanup used to be unconditional. The refusal below
+    /// returns before the call has installed a sender of its own, so the
+    /// cleanup took the *other* session's: nativeStop then answered JNI_FALSE
+    /// while the tunnel was still up, and the only way back was the engine
+    /// ending by itself. The app's stop path reads that false as "already
+    /// stopped" and reports a tunnel down that is still carrying traffic.
+    ///
+    /// This is the guard's own model -- the same body, up to the point the
+    /// sender is installed -- so it fails against the old code and passes now.
+    #[test]
+    fn refusing_a_second_run_leaves_the_first_runnable() {
+        let running: Cell<bool> = Cell::new(false);
+        let armed = Cell::new(false);
+
+        // The state the first nativeRun leaves behind.
+        let (first_tx, mut first_rx) = oneshot::channel();
+        *STOP_SENDER.lock() = Some(first_tx);
+        running.set(true);
+
+        // What the second nativeRun does: refuse, then run the failure path.
+        let second_armed = Cell::new(false);
+        let second_err = (|| -> Result<(), &'static str> {
+            let sender = STOP_SENDER.lock();
+            if sender.is_some() {
+                return Err("engine is already running");
+            }
+            Err("unreachable")
+        })()
+        .inspect_err(|_| {
+            if second_armed.get() {
+                STOP_SENDER.lock().take();
+            }
+        })
+        .err();
+        assert_eq!(second_err, Some("engine is already running"));
+
+        // The first engine still answers to a stop. This mirrors nativeStop,
+        // which sends on the channel before the sender drops -- dropping it
+        // alone would cancel the receiver rather than release it.
+        let stopped = STOP_SENDER.lock().take().map(|sender| {
+            let _ = sender.send(());
+            JNI_TRUE
+        });
+        assert_eq!(
+            stopped,
+            Some(JNI_TRUE),
+            "the refusal disarmed the running engine's stop channel"
+        );
+        assert!(first_rx.try_recv().is_ok(), "nativeStop could not deliver");
+        assert!(running.get());
+
+        // And a call that *did* install a sender still cleans up after itself.
+        let (armed_tx, _armed_rx) = oneshot::channel();
+        *STOP_SENDER.lock() = Some(armed_tx);
+        armed.set(true);
+        if armed.get() {
+            STOP_SENDER.lock().take();
+        }
+        assert!(STOP_SENDER.lock().is_none());
     }
 
     #[test]
@@ -1129,6 +1229,50 @@ mod tests {
         .is_err());
     }
 
+    /// The bridge refuses "auto", and that refusal is the app's whole problem.
+    ///
+    /// Resolving Automatic into a real framing is done by the app -- by
+    /// `AetherVpnService` on the connect path, and by the view model on the
+    /// scanner's. Nothing in the bridge resolves it, and a caller that skips
+    /// that step hands the engine a name it refuses outright, so the call
+    /// fails before a packet leaves the phone.
+    ///
+    /// That is not hypothetical: it is how "Get my key" came to fail on every
+    /// press, because Automatic is the default and the key button talked to the
+    /// bridge directly instead of through the service that resolves it. The
+    /// test pins the refusal so the two lists -- the one that validates and the
+    /// one that builds -- cannot drift, and names the five names that are
+    /// actually accepted.
+    #[test]
+    fn automatic_is_refused_rather_than_guessed_at() {
+        let auto = r#"{"mode":"proxy","configPath":"aether.toml","listenPort":1819,"transport":"auto"}"#;
+        let error = BridgeConfig::parse(auto).expect_err("auto must not resolve here");
+        assert!(
+            error.contains("transport must be"),
+            "expected the refusal to name the accepted transports, got: {error}"
+        );
+
+        // Every name that is accepted builds a tunnel, so a transport the app
+        // offers is never one the engine silently turns into something else.
+        for (name, expected) in [
+            ("h2", "masque"),
+            ("h3", "masque"),
+            ("wg", "wireguard"),
+            ("wiw", "warp-in-warp"),
+            ("mim", "masque-in-masque"),
+        ] {
+            let config = format!(
+                r#"{{"mode":"proxy","configPath":"aether.toml","listenPort":1819,"transport":"{name}"}}"#
+            );
+            let parsed = BridgeConfig::parse(&config).expect(name);
+            assert_eq!(
+                parsed.embedded(None).expect(name).protocol,
+                expected,
+                "transport {name} should build {expected}"
+            );
+        }
+    }
+
     /// The transport the app chose is the tunnel the engine builds.
     ///
     /// This used to end in a catch-all that turned anything unrecognised into
@@ -1166,5 +1310,58 @@ mod tests {
         // diagnostics and its update notice, and an engine bump that nobody
         // noticed is one nobody tested on a phone either.
         assert_eq!(aether::version(), "2.0.0");
+    }
+
+    /// Every JNI entry point has to be exported under its plain `Java_` name.
+    ///
+    /// `nativeScan` shipped for a release without its `#[no_mangle]`, and the
+    /// failure is invisible from Rust: the function compiled, the library
+    /// loaded, every test passed, and `nm -D` on the shipped `.so` showed no
+    /// such symbol. Nothing failed until a real phone threw
+    /// `UnsatisfiedLinkError` at a user looking for endpoints -- and because
+    /// the whole endpoint search is one native call, the screen it powered was
+    /// simply dead on device.
+    ///
+    /// The JVM looks these up by mangled-name convention, so the convention is
+    /// the contract and it is checkable here: `no_mangle` stops Rust applying
+    /// its own mangling. Reading this file is the only place that can be seen
+    /// without a built `.so` in hand, and it fails on the exact omission that
+    /// caused the outage rather than on the symptom.
+    #[test]
+    fn every_jni_entry_point_is_exported() {
+        let source = include_str!("lib.rs");
+
+        let mut offenders = Vec::new();
+        let mut lines = source.lines().enumerate().peekable();
+        while let Some((index, line)) = lines.next() {
+            let trimmed = line.trim_start();
+            if !(trimmed.starts_with("pub extern \"system\" fn Java_")
+                || trimmed.starts_with("pub unsafe extern \"system\" fn Java_"))
+            {
+                continue;
+            }
+            // Walk back over attributes and blank lines. There may be more than
+            // one, and a single one of several is the mistake.
+            let mut exported = false;
+            for previous in (0..index).rev() {
+                let candidate = source.lines().nth(previous).unwrap_or_default().trim();
+                if candidate.is_empty() {
+                    continue;
+                }
+                exported = candidate.starts_with("#[no_mangle]")
+                    || candidate.starts_with("#[unsafe(no_mangle)]");
+                break;
+            }
+            if !exported {
+                offenders.push(format!("lib.rs:{}: {}", index + 1, trimmed));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "JNI entry points without #[no_mangle] -- these compile but are not \
+             exported, and fail at run time on the device:\n{}",
+            offenders.join("\n"),
+        );
     }
 }
