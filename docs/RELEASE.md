@@ -10,7 +10,10 @@
    and `libwhiteaestherchain.so`. An APK missing the second installs and runs
    with the exit chain quietly reporting itself unavailable, so the release
    workflow asserts it rather than trusting the build.
-4. Configure the four Android signing secrets documented in `README.md`.
+4. Configure the four Android signing secrets, read by
+   `.github/workflows/release.yml`: `ANDROID_KEYSTORE_BASE64` (the keystore,
+   base64-encoded), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
+   `ANDROID_KEY_PASSWORD`.
 5. Push a signed `vX.Y.Z` tag. GitHub Actions builds and verifies all split APKs,
    the universal APK, and the signed Android App Bundle.
 6. Download the correct ABI APK (or universal APK), verify `SHA256SUMS` and
@@ -18,6 +21,7 @@
    a short smoke test.
 7. Confirm the GitHub release exposes the corresponding source at the same tag.
 
-Continuous main releases are prereleases and are replaced after each successful
-main build. Tagged releases are immutable except for re-uploading assets for the
-same verified tag.
+Releases happen on tags alone. A push to `main` used to trigger a full signed
+build and a rolling prerelease, and every commit produced two long runs and a
+new release; that is gone, and `ci.yml` now only builds and tests. Tagged
+releases are immutable except for re-uploading assets for the same verified tag.
