@@ -1456,7 +1456,10 @@ fun EndpointScreen(
                     onSelect = { wantCustom ->
                         onSettingsChange(
                             settings.copy(
-                                endpointMode = if (wantCustom) EndpointMode.CUSTOM_FIRST else EndpointMode.AUTOMATIC,
+                                // Same rule as picking one from the results:
+                                // naming an address is a choice to use it, and
+                                // the search stays off until it is asked for.
+                                endpointMode = if (wantCustom) EndpointMode.CUSTOM_ONLY else EndpointMode.AUTOMATIC,
                             ),
                         )
                     },
@@ -1620,7 +1623,14 @@ fun EndpointScreen(
                     endpointText = result.peer
                     onSettingsChange(
                         settings.copy(
-                            endpointMode = EndpointMode.CUSTOM_FIRST,
+                            // Without fallback. An address someone just
+                            // chose is one they mean to use, and quietly
+                            // replacing it the moment it stops answering is
+                            // what turns "this worked" into a connection that
+                            // drops and comes back somewhere else. The switch
+                            // below is there for whoever wants the search; it
+                            // is not a thing to be on without being asked.
+                            endpointMode = EndpointMode.CUSTOM_ONLY,
                             customEndpoint = result.peer,
                             customEndpointProtocol = settings.transport,
                         ),
