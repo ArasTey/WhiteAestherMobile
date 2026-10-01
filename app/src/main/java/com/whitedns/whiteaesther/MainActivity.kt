@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whitedns.whiteaesther.core.AppLocale
 import com.whitedns.whiteaesther.data.AppSettings
+import com.whitedns.whiteaesther.data.Carrier
 import com.whitedns.whiteaesther.data.EngineMode
 import com.whitedns.whiteaesther.service.AetherVpnService
 import com.whitedns.whiteaesther.service.EngineStage
@@ -404,15 +405,23 @@ class MainActivity : ComponentActivity() {
             )
             return
         }
-        // No key, no tunnel. Every step from here needs one -- prepare, search,
-        // connect -- and cannot get one for itself on a network that blocks
-        // registration. Left to run, the connection fails several minutes later
-        // with a message about endpoints, which names the wrong missing thing.
+        // No key, no engine. Every step of an Aether session needs one --
+        // prepare, search, connect -- and cannot get one for itself on a network
+        // that blocks registration. Left to run, the connection fails several
+        // minutes later with a message about endpoints, which names the wrong
+        // missing thing.
         //
-        // Only when it is known there is no key. Not yet answered is not the
+        // Only when the engine is actually in the plan. Psiphon and Tor find
+        // their own way out and never use the key, so refusing them here would
+        // have locked a carrier out of an app that works perfectly well
+        // without one. Automatic still includes Aether in the race, so it does
+        // need the key even though it also carries carriers that do not.
+        //
+        // And only when it is known there is no key: not yet answered is not the
         // same as no, and refusing on a phone whose store is merely still being
         // read would stop a connect that would have worked.
-        if (viewModel.hasKey.value == false) {
+        val needsEngineKey = settings.automaticCarrier || settings.carrier == Carrier.AETHER
+        if (needsEngineKey && viewModel.hasKey.value == false) {
             EngineStatusStore.update(
                 EngineStatus(
                     EngineStage.ERROR,

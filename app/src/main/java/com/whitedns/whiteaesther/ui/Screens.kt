@@ -1413,7 +1413,18 @@ fun EndpointScreen(
     val normalized = EndpointAddress.normalize(endpointText)
     val engineBusy = status.stage !in setOf(EngineStage.IDLE, EngineStage.ERROR)
 
-    ScreenColumn {
+    Column(Modifier.fillMaxWidth()) {
+        // Above the page, not inside it. The page scrolls and carries an 18dp
+        // margin on each side, which put the line under a card looking like a
+        // divider that had lost its way; a progress line that scrolls away is
+        // also no longer a progress line once the reader scrolls. Flush to the
+        // edges and pinned at the top is the one place that stays put and reads
+        // as belonging to the screen rather than to a control on it.
+        if (scannerState.operation != null) {
+            LoadingLine()
+        }
+
+        ScreenColumn {
         CrumbBar(stringResource(R.string.routes_endpoint), onBack = onBack)
         PageTitle(stringResource(R.string.where_it_connects_to), stringResource(R.string.leave_this_automatic_unless_someone_gave_you))
 
@@ -1510,15 +1521,6 @@ fun EndpointScreen(
                     modifier = Modifier.testTag("endpoint-fallback-switch"),
                 )
             }
-        }
-
-        // Something on this page is working, and none of the words below will
-        // change until it does. Without this the only sign of it is text that
-        // sits exactly as it did before the button was pressed.
-        if (scannerState.operation != null) {
-            Spacer(Modifier.height(10.dp))
-            LoadingLine()
-            Spacer(Modifier.height(14.dp))
         }
 
         Spacer(Modifier.height(12.dp))
@@ -1666,6 +1668,7 @@ fun EndpointScreen(
                 stringResource(settings.transport.probedAs.label),
             ),
         )
+        }
     }
 }
 

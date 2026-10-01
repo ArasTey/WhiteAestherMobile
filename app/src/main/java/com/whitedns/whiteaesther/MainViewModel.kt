@@ -277,13 +277,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val mutableHasKey = MutableStateFlow<Boolean?>(null)
     val hasKey: StateFlow<Boolean?> = mutableHasKey.asStateFlow()
 
+/**
+     * The engine's configuration for [settings], with the two names it refuses
+     * resolved, and the only place either is resolved.
+     *
+     * The bridge rejects `transport: "auto"` outright and `parse()` runs before
+     * anything is read, so a call that hands it Automatic gets a refusal rather
+     * than an answer. Three call sites had each grown their own workaround and
+     * two of them forgot, which is what left `hasIdentity` reporting "no key" on
+     * a phone that had one -- so the app asked for a key it was holding, and
+     * pressing the button returned it instantly from disk.
+     *
+     * [scanFirstFraming] rather than a fixed answer, because Automatic resolves
+     * per network and this is the same question the scanner and the key request
+     * ask, asked in the same place.
+     */
+    private fun engineConfigFor(settings: AppSettings): AppSettings = settings.copy(
+        // An endpoint is irrelevant to whether a key exists, and a pinned one
+        // would make the bridge ask about a peer instead.
+        endpointMode = EndpointMode.AUTOMATIC,
+        customEndpoint = "",
+        transport = if (settings.transport.isAutomatic) scanFirstFraming() else settings.transport,
+    )
+
     /** Re-asks the engine. Cheap: a read of the store, no network. */
     fun refreshHasKey(settings: AppSettings) {
         viewModelScope.launch {
             mutableHasKey.value = withContext(Dispatchers.IO) {
                 runCatching {
                     NativeAetherBridge.hasIdentity(
-                        settings.copy(endpointMode = EndpointMode.AUTOMATIC).toNativeJson(getApplication()),
+                        engineConfigFor(settings).toNativeJson(getApplication()),
                     )
                 }.getOrDefault(false)
             }
@@ -1171,11 +1194,7 @@ val base = settings.copy(endpointMode = EndpointMode.AUTOMATIC, customEndpoint =
             // asking for anything -- so a second press costs a round trip, not
             // another registration.
             val families = listOf(
-                if (!settings.transport.isAutomatic) {
-                    settings.transport
-                } else {
-                    scanFirstFraming()
-                },
+                engineConfigFor(settings).transport,
                 TunnelProtocol.WIREGUARD,
             ).distinct()
             var lastFailure: Throwable? = null

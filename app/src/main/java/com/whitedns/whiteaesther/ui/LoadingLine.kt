@@ -38,6 +38,10 @@ import com.whitedns.whiteaesther.ui.theme.AetherTheme
  * that advances at a made-up rate is worse than no bar, because it looks like
  * progress that is not being made. This says only that the phone is still
  * working, which is the one thing a person genuinely cannot see from here.
+ *
+ * Full width and two pixels, which is what makes it read as the screen's own
+ * state rather than as one more control among the cards. An inset version
+ * under a card looks like a divider that has lost its place.
  */
 @Composable
 internal fun LoadingLine(
